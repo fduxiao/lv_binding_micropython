@@ -69,6 +69,12 @@ micropython.alloc_emergency_exception_buf(256)
 
 # Constants
 
+
+SPI_HOST = esp.ENUM_SPI_HOST
+HSPI_HOST = esp.ENUM_HSPI_HOST
+VSPI_HOST = esp.ENUM_VSPI_HOST
+
+
 COLOR_MODE_RGB = const(0x00)
 COLOR_MODE_BGR = const(0x08)
 
@@ -105,7 +111,7 @@ class ili9XXX:
 
     def __init__(self,
         miso=5, mosi=18, clk=19, cs=13, dc=12, rst=4, power=14, backlight=15, backlight_on=0, power_on=0,
-        spihost=esp.HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=240, height=320, start_x=0, start_y=0,
+        spihost=HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=240, height=320, start_x=0, start_y=0,
         invert=False, double_buffer=True, half_duplex=True, display_type=0, asynchronous=False, initialize=True,
         color_format=None
     ):
@@ -185,7 +191,6 @@ class ili9XXX:
     ######################################################
 
     def disp_spi_init(self):
-
         # TODO: Register finalizer callback to deinit SPI.
         # That would get called on soft reset.
 
@@ -225,7 +230,7 @@ class ili9XXX:
         if buscfg.mosi_io_num >= 0 and \
            buscfg.sclk_io_num >= 0:
 
-            if buscfg.miso_io_num  >= 0:
+            if buscfg.miso_io_num >= 0:
                 esp.gpio_pad_select_gpio(self.miso)
                 esp.gpio_set_direction(self.miso, esp.GPIO_MODE.INPUT)
                 esp.gpio_set_pull_mode(self.miso, esp.GPIO.PULLUP_ONLY)
@@ -235,18 +240,46 @@ class ili9XXX:
             esp.gpio_set_direction(self.mosi, esp.GPIO_MODE.OUTPUT)
             esp.gpio_set_direction(self.clk, esp.GPIO_MODE.OUTPUT)
 
-            ret = esp.spi_bus_initialize(self.spihost, buscfg, 1)
-            if ret != 0: raise RuntimeError("Failed initializing SPI bus")
+            # There are several changes that were made to the IDF when the
+            # version went from 3 to 4 and then again with the addition of the
+            # S2 and later the S3 and C3 varients. This made a mess of the SPI
+            # handling. The code below sorts out that mess when dealing with
+            # the DMA channels.
+
+            dma_chan = esp.SPI_DMA_DISABLED
+
+            if self.spihost == HSPI_HOST:
+                if HSPI_HOST == 2:
+                    dma_chan = esp.SPI_DMA_CH_AUTO
+                else:
+                    dma_chan = esp.SPI_DMA_CH1
+
+            if self.spihost == VSPI_HOST:
+                if VSPI_HOST == 1:
+                    dma_chan = esp.SPI_DMA_CH1
+                else:
+                    dma_chan = esp.SPI_DMA_CH2
+
+            ret = esp.spi_bus_initialize(self.spihost, buscfg, dma_chan)
+            if ret != 0:
+                raise RuntimeError(
+                    "Failed initializing SPI bus ({0})".format(hex(ret))
+                )
 
         self.trans_buffer = esp.heap_caps_malloc(TRANS_BUFFER_LEN, esp.MALLOC_CAP.DMA)
         self.cmd_trans_data = self.trans_buffer.__dereference__(1)
         self.word_trans_data = self.trans_buffer.__dereference__(4)
 
         # Attach the LCD to the SPI bus
-
         ptr_to_spi = esp.C_Pointer()
         ret = esp.spi_bus_add_device(self.spihost, devcfg, ptr_to_spi)
-        if ret != 0: raise RuntimeError("Failed adding SPI device")
+        if ret != 0:
+            # free the spi bus
+            esp.spi_bus_free(self.spihost)
+
+            raise RuntimeError(
+                "Failed adding SPI device ({0})".format(hex(ret))
+            )
         self.spi = ptr_to_spi.ptr_val
 
         self.bytes_transmitted = 0
@@ -540,7 +573,7 @@ class ili9341(ili9XXX):
 
     def __init__(self,
         miso=5, mosi=18, clk=19, cs=13, dc=12, rst=4, power=14, backlight=15, backlight_on=0, power_on=0,
-        spihost=esp.HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=240, height=320, start_x=0, start_y=0,
+        spihost=HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=240, height=320, start_x=0, start_y=0,
         colormode=COLOR_MODE_BGR, rot=PORTRAIT, invert=False, double_buffer=True, half_duplex=True,
         asynchronous=False, initialize=True, color_format=lv.COLOR_FORMAT.NATIVE_REVERSED
     ):
@@ -592,7 +625,7 @@ class ili9488(ili9XXX):
 
     def __init__(self,
         miso=5, mosi=18, clk=19, cs=13, dc=12, rst=4, power=14, backlight=15, backlight_on=0, power_on=0,
-        spihost=esp.HSPI_HOST, spimode=0, mhz=40, factor=8, hybrid=True, width=320, height=480, colormode=COLOR_MODE_RGB,
+        spihost=HSPI_HOST, spimode=0, mhz=40, factor=8, hybrid=True, width=320, height=480, colormode=COLOR_MODE_RGB,
         rot=PORTRAIT, invert=False, double_buffer=True, half_duplex=True, asynchronous=False, initialize=True,
         color_format=None, display_type=DISPLAY_TYPE_ILI9488, p16=False
     ):
@@ -672,7 +705,7 @@ class gc9a01(ili9XXX):
 
     def __init__(self,
         miso=5, mosi=18, clk=19, cs=13, dc=12, rst=4, power=14, backlight=15, backlight_on=0, power_on=0,
-        spihost=esp.HSPI_HOST, spimode=0, mhz=60, factor=4, hybrid=True, width=240, height=240, colormode=COLOR_MODE_RGB,
+        spihost=HSPI_HOST, spimode=0, mhz=60, factor=4, hybrid=True, width=240, height=240, colormode=COLOR_MODE_RGB,
         rot=PORTRAIT, invert=False, double_buffer=True, half_duplex=True, asynchronous=False, initialize=True,
         color_format=None
     ):
@@ -752,7 +785,6 @@ class gc9a01(ili9XXX):
             display_type=DISPLAY_TYPE_GC9A01, asynchronous=asynchronous, initialize=initialize, color_format=color_format)
 
 class st7789(ili9XXX):
-
     # The st7789 display controller has an internal framebuffer arranged in a 320x240 pixel
     # configuration. Physical displays with pixel sizes less than 320x240 must supply a start_x and
     # start_y argument to indicate where the physical display begins relative to the start of the
@@ -760,7 +792,7 @@ class st7789(ili9XXX):
 
     def __init__(self,
         miso=-1, mosi=19, clk=18, cs=5, dc=16, rst=23, power=-1, backlight=4, backlight_on=1, power_on=0,
-        spihost=esp.HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=320, height=240, start_x=0, start_y=0,
+        spihost=HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=320, height=240, start_x=0, start_y=0,
         colormode=COLOR_MODE_BGR, rot=PORTRAIT, invert=True, double_buffer=True, half_duplex=True,
         asynchronous=False, initialize=True, color_format=lv.COLOR_FORMAT.NATIVE_REVERSED):
 
@@ -812,7 +844,7 @@ class st7735(ili9XXX):
 
     def __init__(self,
         miso=-1, mosi=19, clk=18, cs=13, dc=12, rst=4, power=-1, backlight=15, backlight_on=1, power_on=0,
-        spihost=esp.HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=128, height=160, start_x=0, start_y=0,
+        spihost=HSPI_HOST, spimode=0, mhz=40, factor=4, hybrid=True, width=128, height=160, start_x=0, start_y=0,
         colormode=COLOR_MODE_RGB, rot=PORTRAIT, invert=False, double_buffer=True, half_duplex=True,
         asynchronous=False, initialize=True, color_format=lv.COLOR_FORMAT.NATIVE_REVERSED):
 
